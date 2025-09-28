@@ -8,6 +8,12 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8000;
 
+// Python service configuration
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
+
+// Log configuration on startup
+console.log(`🐍 Python service URL: ${PYTHON_SERVICE_URL}`);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -81,7 +87,7 @@ app.post('/api/llm/question', async (req, res) => {
 
     // Forward to Python microservice for LLM processing
     const response = await axios.post(
-      `${process.env.PYTHON_SERVICE_URL}/llm/answer`,
+      `${PYTHON_SERVICE_URL}/llm/answer`,
       {
         question,
         context
@@ -113,7 +119,7 @@ app.get('/api/vector/search', async (req, res) => {
 
     // Forward to Python microservice for vector search
     const response = await axios.get(
-      `${process.env.PYTHON_SERVICE_URL}/vector/search`,
+      `${PYTHON_SERVICE_URL}/vector/search`,
       {
         params: { query, limit }
       }
@@ -135,6 +141,7 @@ app.get('/api/vector/search', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🐍 Python service: ${PYTHON_SERVICE_URL}`);
 });
 
 module.exports = app;
