@@ -30,7 +30,14 @@ export default function Home() {
   const [vectorResults, setVectorResults] = useState<VectorSearchResponse | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'llm' | 'vector' | 'tts'>('llm');
+  const [activeTab, setActiveTab] = useState<'llm' | 'vector' | 'tts' | 'streaming'>('llm');
+  
+  // Streaming audio state
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
+  const [wsConnection, setWsConnection] = useState<WebSocket | null>(null);
+  const [streamingStatus, setStreamingStatus] = useState<string>('Ready to start');
+  const [eotDetected, setEotDetected] = useState(false);
 
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
@@ -120,6 +127,114 @@ export default function Home() {
     }
   };
 
+  // F.1.1: Streaming Audio Functions
+  const startStreamingAudio = async () => {
+    try {
+      setStreamingStatus('Requesting microphone access...');
+      
+      // Get microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
+      
+      setAudioStream(stream);
+      setStreamingStatus('Connecting to audio service...');
+      
+      // Connect to WebSocket
+      const wsUrl = backendUrl.replace('http', 'ws') + '/ws/audio';
+      const ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        setStreamingStatus('Connected! Start speaking...');
+        setIsRecording(true);
+        setEotDetected(false);
+      };
+      
+      ws.onmessage = (event) => {
+        if (event.data instanceof Blob) {
+          // This is the complete audio buffer from EoT detection
+          setStreamingStatus('EoT detected! Audio buffer received.');
+          setEotDetected(true);
+          console.log('Received complete audio buffer:', event.data.size, 'bytes');
+        } else {
+          // This is a status message
+          try {
+            const message = JSON.parse(event.data);
+            if (message.type === 'eot') {
+              setStreamingStatus(`EoT detected! Audio size: ${message.audio_size} bytes`);
+              setEotDetected(true);
+            } else if (message.type === 'status') {
+              const state = message.vad_state;
+              setStreamingStatus(`Listening... Speech: ${state.speech_frames}, Silence: ${state.silence_frames}`);
+            }
+          } catch (e) {
+            console.log('Status update:', event.data);
+          }
+        }
+      };
+      
+      ws.onclose = () => {
+        setStreamingStatus('Connection closed');
+        setIsRecording(false);
+      };
+      
+      ws.onerror = (error) => {
+        setStreamingStatus('Connection error');
+        console.error('WebSocket error:', error);
+      };
+      
+      setWsConnection(ws);
+      
+      // Start audio processing
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      
+      processor.onaudioprocess = (event) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          const inputBuffer = event.inputBuffer;
+          const inputData = inputBuffer.getChannelData(0);
+          
+          // Convert float32 to int16 PCM
+          const pcmData = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+          }
+          
+          // Send audio chunk to WebSocket
+          ws.send(pcmData.buffer);
+        }
+      };
+      
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      
+    } catch (error) {
+      setStreamingStatus('Error: ' + error.message);
+      console.error('Streaming audio error:', error);
+    }
+  };
+  
+  const stopStreamingAudio = () => {
+    if (audioStream) {
+      audioStream.getTracks().forEach(track => track.stop());
+      setAudioStream(null);
+    }
+    
+    if (wsConnection) {
+      wsConnection.close();
+      setWsConnection(null);
+    }
+    
+    setIsRecording(false);
+    setStreamingStatus('Stopped');
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-4xl mx-auto px-4">
@@ -170,6 +285,16 @@ export default function Home() {
               }`}
             >
               F.0.1: TTS Test
+            </button>
+            <button
+              onClick={() => setActiveTab('streaming')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === 'streaming'
+                  ? 'bg-blue-500 text-white'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              F.1.1: Streaming ASR
             </button>
           </div>
         </div>
@@ -319,6 +444,65 @@ export default function Home() {
                 </audio>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Streaming ASR Tab */}
+        {activeTab === 'streaming' && (
+          <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 className="text-xl font-semibold mb-4">F.1.1: Streaming ASR & EoT Detection</h2>
+            <div className="space-y-4">
+              <div className="p-4 bg-blue-50 rounded-md">
+                <h3 className="font-medium text-blue-900 mb-2">Instructions:</h3>
+                <ol className="text-sm text-blue-800 space-y-1">
+                  <li>1. Click "Start Recording" to begin audio streaming</li>
+                  <li>2. Speak a sentence, then pause for 2+ seconds</li>
+                  <li>3. The system will detect End-of-Turn (EoT) automatically</li>
+                  <li>4. Check the status updates below</li>
+                </ol>
+              </div>
+              
+              <div className="flex space-x-4">
+                <button
+                  onClick={startStreamingAudio}
+                  disabled={isRecording}
+                  className="bg-green-500 text-white px-6 py-2 rounded-md hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRecording ? 'Recording...' : 'Start Recording'}
+                </button>
+                <button
+                  onClick={stopStreamingAudio}
+                  disabled={!isRecording}
+                  className="bg-red-500 text-white px-6 py-2 rounded-md hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Stop Recording
+                </button>
+              </div>
+              
+              <div className="p-4 bg-gray-50 rounded-md">
+                <h3 className="font-medium mb-2">Status:</h3>
+                <p className="text-sm text-gray-700">{streamingStatus}</p>
+                {eotDetected && (
+                  <div className="mt-2 p-2 bg-green-100 text-green-800 rounded text-sm">
+                    ✅ End-of-Turn detected! Audio buffer ready for transcription.
+                  </div>
+                )}
+              </div>
+              
+              <div className="p-4 bg-yellow-50 rounded-md">
+                <h3 className="font-medium text-yellow-900 mb-2">Checkpoint 1.1 & 1.2:</h3>
+                <div className="text-sm text-yellow-800 space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-green-400' : 'bg-gray-300'}`}></div>
+                    <span>WebSocket stream integrity: {isRecording ? 'Active' : 'Inactive'}</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${eotDetected ? 'bg-green-400' : 'bg-gray-300'}`}></div>
+                    <span>Utterance segmentation: {eotDetected ? 'EoT Detected' : 'Waiting for speech'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 import logging
+import asyncio
+import json
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +32,7 @@ app.add_middleware(
 # Import service modules
 from services.llm_service import LLMService
 from services.vector_service import VectorService
+from services.audio_processing import RealTimeVADStreamer
 
 # Initialize services
 llm_service = LLMService()
@@ -120,6 +123,71 @@ async def ingest_documents(documents: list[dict]):
     except Exception as e:
         logger.error(f"Document ingestion error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Document ingestion failed: {str(e)}")
+
+# F.1.1: Streaming Audio WebSocket Endpoint
+@app.websocket("/ws/stream/audio")
+async def stream_audio(websocket: WebSocket):
+    """
+    WebSocket endpoint for streaming audio and detecting End-of-Turn (EoT).
+    
+    This endpoint:
+    1. Accepts raw audio chunks from the client
+    2. Uses VAD to detect speech activity
+    3. Detects End-of-Turn when silence threshold is met
+    4. Returns the complete audio buffer for transcription
+    """
+    await websocket.accept()
+    logger.info("WebSocket audio stream connection established")
+    
+    # Initialize VAD streamer
+    vad_streamer = RealTimeVADStreamer()
+    
+    try:
+        while True:
+            # Receive audio chunk from client
+            data = await websocket.receive_bytes()
+            
+            # Log chunk size for debugging
+            logger.debug(f"Received audio chunk: {len(data)} bytes")
+            
+            # Process chunk through VAD
+            complete_audio = vad_streamer.process_chunk(data)
+            
+            # If EoT detected, send the complete audio buffer
+            if complete_audio:
+                logger.info(f"EoT detected, sending complete audio buffer: {len(complete_audio)} bytes")
+                
+                # Send EoT signal with audio data
+                eot_message = {
+                    "type": "eot",
+                    "audio_size": len(complete_audio),
+                    "vad_state": vad_streamer.get_state()
+                }
+                
+                await websocket.send_text(json.dumps(eot_message))
+                
+                # Send the complete audio buffer
+                await websocket.send_bytes(complete_audio)
+                
+                # Reset for next utterance
+                vad_streamer = RealTimeVADStreamer()
+                
+            # Send periodic status updates
+            elif len(data) > 0:  # Only send status for non-empty chunks
+                status_message = {
+                    "type": "status",
+                    "vad_state": vad_streamer.get_state()
+                }
+                await websocket.send_text(json.dumps(status_message))
+                
+    except WebSocketDisconnect:
+        logger.info("WebSocket audio stream connection closed")
+    except Exception as e:
+        logger.error(f"WebSocket audio stream error: {e}")
+        try:
+            await websocket.close()
+        except:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
