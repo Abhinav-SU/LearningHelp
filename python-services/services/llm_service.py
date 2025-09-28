@@ -19,12 +19,16 @@ class LLMService:
     def _initialize_client(self):
         """Initialize the LLM client based on available API keys"""
         try:
-            if self.openai_api_key:
+            # Check if we have valid API keys (not mock keys)
+            valid_openai_key = self.openai_api_key and not self.openai_api_key.startswith('mock_')
+            valid_google_key = self.google_api_key and not self.google_api_key.startswith('mock_')
+            
+            if valid_openai_key:
                 import openai
                 self._client = openai.OpenAI(api_key=self.openai_api_key)
                 self.active_provider = 'openai'
                 logger.info("Initialized OpenAI client")
-            elif self.google_api_key:
+            elif valid_google_key:
                 import google.generativeai as genai
                 genai.configure(api_key=self.google_api_key)
                 self._client = genai.GenerativeModel('gemini-2.0-flash-exp')  # Cost-optimized
@@ -32,7 +36,7 @@ class LLMService:
                 self.preferred_model = 'gemini-2.0-flash-exp'
                 logger.info("Initialized Google Gemini client")
             else:
-                logger.warning("No API keys found - LLM service will use mock responses")
+                logger.warning("No valid API keys found - LLM service will use mock responses")
                 self.active_provider = 'mock'
         except Exception as e:
             logger.error(f"Failed to initialize LLM client: {e}")
