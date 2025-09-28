@@ -1,0 +1,21 @@
+{
+  "name": "ai-interview-system",
+  "version": "1.0.0",
+  "description": "AI Interview System with streaming ASR, LLM, and TTS capabilities",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\" \"npm run dev:python\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:python": "cd python-services && python -m uvicorn main:app --reload --port 8001",
+    "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install && cd ../python-services && pip install -r requirements.txt",
+    "build": "cd frontend && npm run build",
+    "start": "cd frontend && npm start"
+  },
+  "keywords": ["ai", "interview", "asr", "tts", "llm", "vector-db"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
