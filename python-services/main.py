@@ -33,6 +33,7 @@ app.add_middleware(
 from services.llm_service import LLMService
 from services.vector_service import VectorService
 from services.audio_processing import RealTimeVADStreamer
+from services.asr_service import transcribe_utterance
 
 # Initialize services
 llm_service = LLMService()
@@ -153,21 +154,51 @@ async def stream_audio(websocket: WebSocket):
             # Process chunk through VAD
             complete_audio = vad_streamer.process_chunk(data)
             
-            # If EoT detected, send the complete audio buffer
+            # If EoT detected, transcribe the audio and simulate Step Functions trigger
             if complete_audio:
-                logger.info(f"EoT detected, sending complete audio buffer: {len(complete_audio)} bytes")
+                logger.info(f"EoT detected, processing complete audio buffer: {len(complete_audio)} bytes")
                 
-                # Send EoT signal with audio data
-                eot_message = {
-                    "type": "eot",
-                    "audio_size": len(complete_audio),
-                    "vad_state": vad_streamer.get_state()
-                }
+                # Transcribe the audio using ASR service
+                transcript = transcribe_utterance(complete_audio)
                 
-                await websocket.send_text(json.dumps(eot_message))
-                
-                # Send the complete audio buffer
-                await websocket.send_bytes(complete_audio)
+                if transcript:
+                    logger.info(f"Final transcript: '{transcript}'")
+                    
+                    # Simulate Step Functions workflow trigger (F.1.2)
+                    step_functions_input = {
+                        "utterance": transcript,
+                        "session_id": "mock_session_123",  # In real implementation, this would come from session management
+                        "timestamp": asyncio.get_event_loop().time(),
+                        "audio_metadata": {
+                            "duration_ms": len(complete_audio) // 32,  # Rough estimate: 16kHz * 2 bytes = 32 bytes/ms
+                            "size_bytes": len(complete_audio)
+                        }
+                    }
+                    
+                    logger.info("Simulating AWS Step Functions workflow trigger with input:")
+                    logger.info(json.dumps(step_functions_input, indent=2))
+                    
+                    # Send EoT signal with transcript
+                    eot_message = {
+                        "type": "eot",
+                        "transcript": transcript,
+                        "audio_size": len(complete_audio),
+                        "vad_state": vad_streamer.get_state(),
+                        "step_functions_triggered": True
+                    }
+                    
+                    await websocket.send_text(json.dumps(eot_message))
+                    
+                else:
+                    logger.warning("Transcription failed, sending EoT without transcript")
+                    eot_message = {
+                        "type": "eot",
+                        "transcript": None,
+                        "audio_size": len(complete_audio),
+                        "vad_state": vad_streamer.get_state(),
+                        "step_functions_triggered": False
+                    }
+                    await websocket.send_text(json.dumps(eot_message))
                 
                 # Reset for next utterance
                 vad_streamer = RealTimeVADStreamer()
