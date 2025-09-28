@@ -2,11 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const axios = require('axios');
+const expressWs = require('express-ws');
+const WebSocket = require('ws');
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 8000;
+
+// Enable WebSocket support
+expressWs(app);
 
 // Middleware
 app.use(cors());
@@ -131,10 +136,84 @@ app.get('/api/vector/search', async (req, res) => {
   }
 });
 
+// F.1.1: WebSocket Audio Proxy
+app.ws('/ws/audio', (ws, req) => {
+  console.log('🎤 WebSocket audio proxy connection established');
+  
+  let pythonWs = null;
+  const pythonServiceUrl = process.env.PYTHON_SERVICE_URL || 'ws://localhost:8001';
+  
+  // Connect to Python service WebSocket
+  const connectToPython = () => {
+    try {
+      pythonWs = new WebSocket(`${pythonServiceUrl}/ws/stream/audio`);
+      
+      pythonWs.on('open', () => {
+        console.log('✅ Connected to Python audio service');
+      });
+      
+      pythonWs.on('message', (data) => {
+        // Forward Python service messages to frontend
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      });
+      
+      pythonWs.on('close', () => {
+        console.log('❌ Python audio service connection closed');
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      });
+      
+      pythonWs.on('error', (error) => {
+        console.error('❌ Python audio service error:', error);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      });
+      
+    } catch (error) {
+      console.error('❌ Failed to connect to Python service:', error);
+      ws.close();
+    }
+  };
+  
+  // Handle messages from frontend
+  ws.on('message', (data) => {
+    // Forward audio data to Python service
+    if (pythonWs && pythonWs.readyState === WebSocket.OPEN) {
+      pythonWs.send(data);
+    } else {
+      console.log('⚠️ Python service not connected, attempting reconnection...');
+      connectToPython();
+    }
+  });
+  
+  // Handle frontend disconnection
+  ws.on('close', () => {
+    console.log('🎤 Frontend audio connection closed');
+    if (pythonWs) {
+      pythonWs.close();
+    }
+  });
+  
+  ws.on('error', (error) => {
+    console.error('❌ Frontend audio connection error:', error);
+    if (pythonWs) {
+      pythonWs.close();
+    }
+  });
+  
+  // Initial connection to Python service
+  connectToPython();
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🎤 WebSocket audio proxy: ws://localhost:${PORT}/ws/audio`);
 });
 
 module.exports = app;
